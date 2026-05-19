@@ -1,0 +1,82 @@
+name: Sync upstream DS4 and apply 64GB overlay
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 64ram repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Save overlay files
+        run: |
+          mkdir -p /tmp/64ram-overlay/docs /tmp/64ram-overlay/.github/workflows
+          cp README_64GB_PROGRESS.md /tmp/64ram-overlay/README_64GB_PROGRESS.md
+          cp docs/64gb-lowmem-expert-cache.md /tmp/64ram-overlay/docs/64gb-lowmem-expert-cache.md
+          cp .github/workflows/sync-upstream.yml /tmp/64ram-overlay/.github/workflows/sync-upstream.yml
+
+      - name: Reset repository to upstream antirez/ds4 main
+        run: |
+          git remote add upstream https://github.com/antirez/ds4.git || true
+          git fetch upstream main --depth=1
+          git checkout -B main upstream/main
+
+      - name: Apply 64GB RAM overlay
+        run: |
+          mkdir -p docs .github/workflows
+          cp /tmp/64ram-overlay/README_64GB_PROGRESS.md README_64GB_PROGRESS.md
+          cp /tmp/64ram-overlay/docs/64gb-lowmem-expert-cache.md docs/64gb-lowmem-expert-cache.md
+          cp /tmp/64ram-overlay/.github/workflows/sync-upstream.yml .github/workflows/sync-upstream.yml
+
+          python3 - <<'PY'
+          from pathlib import Path
+          readme = Path('README.md')
+          text = readme.read_text()
+          marker = '## Experimental 64GB RAM track'
+          section = '''## Experimental 64GB RAM track
+
+This fork tracks upstream `antirez/ds4` while exploring a 64GB-RAM execution path for DeepSeek V4 Flash.
+
+The current upstream q2 path targets 96GB/128GB-class machines, so 64GB support is not expected to be solved by compiler flags or by reducing context alone. The intended direction is a MoE-aware low-memory runtime:
+
+- keep dense/shared weights resident;
+- keep routed expert tensors compressed;
+- load/cache routed experts on demand by `(layer, expert, tensor_kind)`;
+- prefetch likely next experts asynchronously;
+- use a bounded expert cache such as 24-40GB;
+- keep context small at first, for example `--ctx 4096` or `--ctx 8192`;
+- keep disk KV cache enabled for agent/client reuse.
+
+This is currently a progress/design update, not a completed low-memory runtime. See:
+
+- [`README_64GB_PROGRESS.md`](README_64GB_PROGRESS.md)
+- [`docs/64gb-lowmem-expert-cache.md`](docs/64gb-lowmem-expert-cache.md)
+
+Target future command shape:
+
+```sh
+./ds4-server -m ds4flash.gguf --ctx 4096 --nothink \\
+  --kv-disk-dir /tmp/ds4-kv --kv-disk-space-mb 32768 \\
+  --lowmem --expert-cache-gb 32 --expert-prefetch 2
+```
+
+'''
+          if marker not in text:
+              text = text.replace('# DwarfStar 4\n\n', '# DwarfStar 4\n\n' + section)
+          readme.write_text(text)
+          PY
+
+      - name: Commit and push full package
+        run: |
+          git config user.name "steven7am"
+          git config user.email "steven7am@users.noreply.github.com"
+          git add -A
+          git commit -m "Sync upstream ds4 and apply 64GB RAM overlay" || echo "No changes to commit"
+          git push origin main --force
